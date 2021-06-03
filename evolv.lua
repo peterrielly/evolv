@@ -1,0 +1,733 @@
+-- title:  Evolv
+-- author: Pete Rielly
+-- desc:   Probe the microzone, evolve to survive.
+-- script: lua
+
+t=0
+timer1=nil
+score=0
+
+dbg=""
+sin=math.sin
+cos=math.cos
+rnd=math.random
+
+mstart=false
+
+stars={}
+mols={}
+bullets={}
+particles={}
+enemybullets={}
+
+moltype={2,4,5}
+
+startspeed=1.5
+startenergy=200
+startsize=4
+
+sunr=20
+sunx=600
+suny=600
+shaket=0
+incp=1.1
+decp=0.95
+
+universe={
+    minx=0,
+    miny=0,
+    maxx=1200,
+    maxy=1200
+}
+cam={x=120,y=68}
+
+
+state={
+    current="title",
+    prev="title",
+    next="title"
+}
+
+function end_tic()
+    if mstart then
+        music(-1)
+        mstart=false
+    end
+    printc("Game Over",120,50,11,2)
+    if btnp(4) or btnp(5) then
+		state.current="title"
+    end
+end
+
+function drawVBar(x,y,w,h,fill,col)
+    rectb(x,y,w,h,col)
+    rect(x,y+(h-h*fill),w,h*fill,col)
+end
+
+function drawEvol(x,y,size,col)
+    local spin=math.pi*2/360*t
+    local sp,sz,en
+    sp=ship.basespeed/startspeed
+    sz=ship.size/startsize
+    en=ship.maxenergy/startenergy
+    local x1,y1,x2,y2,x3,y3
+    x1=x+math.cos(spin+math.pi*2/3)*size*sp
+    y1=y+math.sin(spin+math.pi*2/3)*size*sp
+
+    x2=x+math.cos(spin+math.pi*2/3*2)*size*sz
+    y2=y+math.sin(spin+math.pi*2/3*2)*size*sz
+
+    x3=x+math.cos(spin+math.pi*2)*size*en
+    y3=y+math.sin(spin+math.pi*2)*size*en
+
+    tri(x1,y1,x2,y2,x3,y3,col)
+    rectb(x1-1,y1-1,3,3,2)
+    rectb(x2-1,y2-1,3,3,4)
+    rectb(x3-1,y3-1,3,3,5)
+end
+
+function updateShake()
+	if shaket > 0 then
+		shaket = shaket-1
+		poke(0x3FF9,math.random(-2,2))
+		poke(0x3FF9+1,math.random(-2,2))
+	else
+		poke(0x3FF9,0)
+		poke(0x3FF9+1,0)
+	end
+end
+
+function newParticle(x,y,a,c,l)
+    local n ={
+        x=x,
+        y=y,
+        a=a,
+        c=c,
+        l=l,
+        ci=1,
+        s=1+rnd(),
+        draw=function(p)
+            p.ci=p.ci+1
+            if p.ci > #p.c then p.ci=1 end
+            rect(p.x-cam.x,p.y-cam.y,2,2,p.c[p.ci])
+        end,
+        update=function(p)
+            p.l=p.l-1
+            p.x=p.x+math.cos(p.a)*p.s
+            p.y=p.y-math.sin(p.a)*p.s
+        end
+    }
+    return n
+
+end
+
+function distance(x1,y1,x2,y2)
+	return math.abs(math.sqrt((x1-x2)*(x1-x2)+(y1-y2)*(y1-y2)))
+end
+
+function angle(x1,y1,x2,y2)
+	return math.atan2(y1-y2,x2-x1)
+end
+
+function spawnMol()
+    local s=newMol(
+                    rnd(universe.minx+320,universe.maxx-320),
+                    rnd(universe.miny+136,universe.maxx-136),
+                    rnd(20,30),
+                    moltype[rnd(#moltype)],
+                    moltype[rnd(#moltype)]
+            )
+    for i,m in ipairs(mols) do
+        while distance(s.x,s.y,m.x,m.y) < 50 do
+            m.x=rnd(universe.minx+320,universe.maxx-320)
+            m.y=rnd(universe.miny+200,universe.maxx-200)
+        end
+    end
+ 
+    return s
+
+end
+
+function lerp(a,b,mu)
+	return a*(1-mu)+b*mu
+end
+
+function init()
+    score=0
+    ship=nil
+    ship=newShip(600,400)
+    cam={x=120,y=68}
+    for i,_ in ipairs(bullets) do
+        bullets[i]=nil
+    end
+    for i,_ in ipairs(stars) do
+        stars[i]=nil
+    end
+    for i,_ in ipairs(mols) do
+        mols[i]=nil
+    end
+    for i=1,75 do
+        local s=newStar(
+                        2*rnd()*math.pi,
+                        {rnd(1,15),rnd(1,15),rnd(1,15)},
+                        rnd(300)
+                    )
+        stars[i]=s
+    end
+
+    for i=1,20 do        
+        mols[i]=spawnMol()
+    end
+
+    timer1=nil
+
+    if not mstart then
+        music(0)
+        mstart=true
+    end
+
+end
+
+function newBullet(x,y,a,l)
+    local s={
+        x=x,
+        y=y,
+        ang=a,
+        l=l,
+        speed=3,
+        alive=true,
+        r=3,
+        draw=function(a)
+            if a.alive then
+               -- circ(a.x-cam.x,a.y-cam.y,a.r,12)
+               rect(a.x-cam.x-1,a.y-cam.y-1,3,3,12)
+            end
+        end,
+        update=function(a)
+            if a.alive then
+                a.x=a.x+math.cos(a.ang)*a.speed
+                a.y=a.y-math.sin(a.ang)*a.speed
+
+                if a.x <universe.minx then 
+                    a.x=universe.maxx-a.x 
+                elseif a.x >universe.maxx then 
+                    a.x=a.x-universe.maxx 
+                elseif a.y <universe.miny then 
+                    a.y=universe.maxy-a.y 
+                elseif a.y >universe.maxy then 
+                    a.y=a.y-universe.maxy 
+                end
+                a.l=a.l-1
+                if a.l <=0 then a.alive=false end
+            end
+        end
+    }
+    return s
+end
+
+function newMol(x,y,r,col,scol)
+    local s={
+        x=x,
+        y=y,
+        ang=rnd()*math.pi*2,
+        speed=1,
+        alive=true,
+        satalive=true,
+        r=r,
+        col=col,
+        scol=scol,
+        hp=8,
+        flash=0,
+        aggro=120+rnd(60),
+        target=false,
+        draw=function(a)
+            if a.alive then
+                circ(a.x-cam.x,a.y-cam.y,2+a.r+sin(t/4)*2,0)
+                circ(a.x-cam.x,a.y-cam.y,5,a.col)
+                if a.satalive then
+                    --satalite
+                    if a.flash >0 then
+                        circb(a.x-cam.x,a.y-cam.y,a.r,t%15)
+                    else
+                        circb(a.x-cam.x,a.y-cam.y,a.r,a.scol)
+                    end
+                    local sx,sy
+                    sx=a.x+math.cos(a.ang)*(a.r)
+                    sy=a.y+math.sin(a.ang)*(a.r)
+                    circ(sx-cam.x,sy-cam.y,3,a.scol)
+                    if a.target then
+                        line(sx-cam.x,sy-cam.y,ship.x-cam.x, ship.y-cam.y,3)
+                    end
+                end
+                
+
+            end
+        end,
+        update=function(a)
+            if a.alive then
+                a.aggro=a.aggro-1
+                if a.aggro < 20 then
+                    if distance(a.x,a.y,ship.x,ship.y) < 150 then
+                        a.target=true
+                    end
+                end
+                if a.aggro <= 0 then
+                    a.aggro=60
+                    a.target=false
+                    if distance(a.x,a.y,ship.x,ship.y) < 150 then
+                        local sx,sy
+                        sx=a.x+math.cos(a.ang)*(a.r)
+                        sy=a.y+math.sin(a.ang)*(a.r)
+                        table.insert(enemybullets,newBullet(sx,sx,angle(sx,sx,ship.x,ship.y),100))
+                    end
+                end
+                if a.flash >0 then a.flash=a.flash-1 end
+                a.ang=a.ang+math.pi/360*5
+                if a.ang > math.pi*2 then
+                    a.ang=a.ang-math.pi*2
+                end
+            end
+        end,
+        collide=function(a)
+          --[[  if a.satalive then
+                local sx,sy
+                sx=a.x+math.cos(a.ang)*(a.r)
+                sy=a.y+math.sin(a.ang)*(a.r)
+                return sx,sy,3
+            end]]
+            if a.satalive then
+                return a.x,a.y,a.r
+            end
+            if a.alive then
+                return a.x,a.y,5
+            end
+            return 0,0,0
+        end,
+        hit=function(a)
+            if a.satalive then 
+                sfx(4,"D-4",10,3,15,0) -- channel 4
+                a.hp=a.hp-1
+                a.flash=30
+                if a.hp <=0 then
+                    local sx,sy
+                    sx=a.x+math.cos(a.ang)*(a.r)
+                    sy=a.y+math.sin(a.ang)*(a.r)
+                    a.satalive=false
+                    a.hp=3
+                    score=score+10
+                    for i=0,50 do
+                        table.insert(particles,newParticle(sx,sy,i*2*math.pi/20,{4,5,6,7},60))
+                    end
+                end
+            elseif a.alive then
+                sfx(4,"D-4",10,3,15,0) -- channel 4
+                a.hp=a.hp-1
+                if a.hp <=0 then
+                    a.alive=false
+                    score=score+100
+                end
+            end
+        end
+    }
+    return s
+end
+
+function newShip(x,y)
+    local s={
+        x=x,
+        y=y,
+        ang=0,
+        targetang=0,
+        basespeed=startspeed,
+        speed=1,
+        targetspeed=1.5,
+        boost=5,
+        alive=true,
+        dt=0,
+        trail={},
+        tl=8,
+        ti=1,
+        itime=0,
+        size=startsize,
+        col=10,
+        tcol=11,
+        energy=100,
+        maxenergy=startenergy,
+        floor=60,
+        draw=function(a)
+            if a.alive then
+                for _,t in ipairs(a.trail) do
+                    circ(t.x-cam.x,t.y-cam.y,t.size,a.tcol)
+                end
+                circ(a.x-cam.x,a.y-cam.y,a.size,a.col)
+                circb(a.x-cam.x,a.y-cam.y,a.size,a.tcol)
+            end
+        end,
+        update=function(a)
+            if a.alive then
+                if a.energy < a.maxenergy then
+                    a.energy=a.energy+1
+                end
+                a.ang=lerp(a.ang,a.targetang,0.75)
+                a.speed=lerp(a.speed,a.targetspeed,0.05)
+                a.x=a.x+math.cos(a.ang)*a.speed
+                a.y=a.y-math.sin(a.ang)*a.speed
+
+                if a.x <universe.minx then 
+                    a.x=universe.maxx-a.x 
+                elseif a.x >universe.maxx then 
+                    a.x=a.x-universe.maxx 
+                elseif a.y <universe.miny then 
+                    a.y=universe.maxy-a.y 
+                elseif a.y >universe.maxy then 
+                    a.y=a.y-universe.maxy 
+                end
+                --build trail
+
+                a.trail[a.ti]=nil
+                a.trail[a.ti]={}
+                a.trail[a.ti].x=a.x
+                a.trail[a.ti].y=a.y
+                a.trail[a.ti].size=a.size
+                a.trail[a.ti].col=a.col
+                a.ti=a.ti+1
+                if a.ti >= a.tl then a.ti=1 end
+            end
+        end,
+        hit=function(a,p)
+            if ship.alive then
+                if not p.satalive and p.alive then
+                    p.alive=false
+                    score=score+200
+                    sfx(1,"D-5",50,1,15,0) --channel 1
+                    if p.col==2 then
+                        ship.basespeed=ship.basespeed*incp
+                        ship.size=ship.size*(1+1-decp)
+                        ship.maxenergy=ship.maxenergy*decp
+                        dbg="red=speed!"
+                    elseif p.col==4 then
+                        ship.basespeed=ship.basespeed*decp
+                        ship.size=ship.size*decp
+                        ship.maxenergy=ship.maxenergy*decp
+                        dbg="yellow=size"
+                    elseif p.col==5 then
+                        ship.basespeed=ship.basespeed*decp
+                        ship.size=ship.size*(1+1-decp)
+                        ship.maxenergy=ship.maxenergy*incp
+                        dbg="green=energy"
+                    end
+                    ship.targetspeed = ship.basespeed
+
+                    return
+                end
+                a.energy=a.energy-5
+                sfx(2,"C-1",20,2,15,4) -- channel 2
+                shaket=30
+                table.insert(particles,newParticle(ship.x,ship.y,0.5-rnd()+a.ang+math.pi,{10,11,12},60))
+                if a.energy <= 0 then
+                    ship.alive=false
+                    timer1=t+120
+                    for i=0,150 do
+                        table.insert(particles,newParticle(ship.x,ship.y,rnd()+i*2*math.pi/20,{10,11,12},60))
+                    end
+                end 
+            end           
+        end
+    }
+    return s
+end
+
+function printc(s,x,y,c,sc)
+	if sc==nil then sc=1 end
+	local w=print(s,0,-30,c,true,sc)
+	print(s,x-(w/2),y,c or 15,true,sc)
+end
+
+function newStar(a,c,r)
+    local n ={
+        x=0,
+        y=0,
+        a=a,
+        c=c,
+        r=r,
+        ci=1,
+        rad=rnd(20,40),
+        s=1+rnd(),
+        draw=function(p)
+           --[[ p.ci=p.ci+1
+            if p.ci > #p.c then p.ci=1 end
+            rect(p.x-cam.x,p.y-cam.y,2,2,p
+            .c[p.ci])
+            ]]
+           -- circ(p.x-cam.x,p.y-cam.y,3+p.rad+cos(p.x+t/4)*2,0)
+            circ(p.x-cam.x,p.y-cam.y,p.rad+sin(p.x+t/4)*2,1)
+        end,
+        update=function(p)
+            p.x=sunx+math.cos(p.a)*p.r
+            p.y=suny-math.sin(p.a)*p.r
+        end
+    }
+    return n
+
+end
+
+
+function starField()
+    for _,s in ipairs(stars) do
+        s:update()
+        s:draw()
+    end
+
+end
+
+function title_tic()
+    map(0,17)
+
+    printc("Z to fire X to dash",120,100,11,1)
+    printc("Destroy cell defences",120,108,11,1)
+    printc("Eat nucleus to evolve",120,116,11,1)
+
+
+
+    if btnp(4) or btnp(5) then
+		state.prev=state.current
+        state.current="play"
+        init()
+    end
+end
+
+function play_tic()
+
+    -- camera
+    cam.x=ship.x-120-32
+    cam.y=ship.y-68
+--[[
+    if btn(0) and btn(3) then --up right
+        ship.targetang=math.pi/4
+    elseif btn(0) and btn(2) then --up left
+        ship.targetang=math.pi/4*3--or11
+    elseif btn(1) and btn(2) then --down left
+        ship.targetang=math.pi/4*5   
+    elseif btn(1) and btn(3) then --down right
+        ship.targetang=math.pi/4*7
+    elseif btn(0) then --up
+        ship.targetang=math.pi/2
+    elseif btn(1) then --down
+        ship.targetang=math.pi/2*3
+    elseif btn(2) then --left
+        ship.targetang=math.pi
+    elseif btn(3) then --right
+        ship.targetang=0
+    end
+]]
+
+    if btn(2) then --left
+        ship.ang=ship.ang+math.pi/45
+        ship.targetang=ship.ang
+    elseif btn(3) then --right
+        ship.ang=ship.ang-math.pi/45
+        ship.targetang=ship.ang
+    end
+
+
+    if btnp(5) then
+        ship.targetspeed=ship.basespeed
+        ship.speed=ship.boost
+    end
+
+    if btnp(4) then        
+        local b= newBullet(ship.x,ship.y,ship.ang,100)
+        table.insert(bullets,b)
+        sfx(3,"F-3",10,3,15,4) -- channel 3
+        if ship.energy > ship.floor then
+            ship.energy = ship.energy-100
+            if ship.energy < ship.floor then ship.energy=ship.floor end
+        end
+    end
+
+    ship:update()
+
+    cls(0)
+    starField()
+
+    for _,p in ipairs(mols) do
+        p:update()
+        p:draw()
+        local cx,cy,cr=p:collide()
+        if distance(cx,cy,ship.x,ship.y) < math.max(cr,ship.size) then
+            ship:hit(p)
+        end
+    end
+
+    for _,p in ipairs(bullets) do
+        p:update()
+        p:draw()
+        for _,m in ipairs(mols) do
+            local cx,cy,cr=m:collide()
+            if distance(cx,cy,p.x,p.y) < math.max(cr,p.r) then
+                m:hit()
+                p.alive=false
+                for i=0,10 do
+                    table.insert(particles,newParticle(p.x,p.y,i*2*math.pi/10,{0,12},60))
+                end
+            end
+        end
+    end
+
+    for i,p in ipairs(bullets) do
+        if not p.alive then
+            table.remove(bullets,i)
+        end
+    end
+
+    for i,p in ipairs(mols) do
+        if not p.alive then
+            mols[i]=nil
+            mols[i]=spawnMol()
+        end
+    end
+
+    for _,p in ipairs(enemybullets) do
+        p:update()
+        p:draw()
+        if distance(ship.x,ship.y,p.x,p.y) < math.max(ship.size,p.r) then
+            p.alive=false
+            ship.energy=ship.energy-100
+            sfx(2,"C-1",20,2,15,4) -- channel 2
+            for i=0,10 do
+                table.insert(particles,newParticle(p.x,p.y,i*2*math.pi/10,{0,12},60))
+            end
+        end
+
+     --[[   for _,m in ipairs(mols) do
+            local cx,cy,cr=m:collide()
+            if distance(cx,cy,p.x,p.y) < math.max(cr,p.r) then
+                m:hit()
+                p.alive=false
+                for i=0,10 do
+                    table.insert(particles,newParticle(p.x,p.y,i*2*math.pi/10,{0,12},60))
+                end
+            end
+        end]]
+    end
+
+    for i,p in ipairs(enemybullets) do
+        if not p.alive then
+            table.remove(enemybullets,i)
+        end
+    end
+
+    for _,p in ipairs(particles) do
+        p:update()
+        p:draw()
+    end
+
+    ship:draw()
+
+    map(0,0,4,17,0,0,0)
+    drawVBar(8,21,15,69,ship.energy/ship.maxenergy,ship.col)
+    drawEvol(16,115,8,ship.col)
+    print(score,4,6,11)
+
+   -- print(dbg,0,0,12)
+    updateShake()
+
+    if timer1 and t >= timer1 then
+        state.current="end"
+    end
+
+end
+function TIC()
+	t=t+1
+    if state.current=="title" then
+		title_tic()
+	elseif state.current=="play" then
+		play_tic()
+	elseif state.current=="end" then
+		end_tic()
+    elseif state.current=="win" then
+        win_tic()
+    end
+end
+
+-- <TILES>
+-- 001:eccccccccc888888caaaaaaaca888888cacccccccacc0ccccacc0ccccacc0ccc
+-- 002:ccccceee8888cceeaaaa0cee888a0ceeccca0ccc0cca0c0c0cca0c0c0cca0c0c
+-- 003:eccccccccc888888caaaaaaaca888888cacccccccacccccccacc0ccccacc0ccc
+-- 004:ccccceee8888cceeaaaa0cee888a0ceeccca0cccccca0c0c0cca0c0c0cca0c0c
+-- 017:cacccccccaaaaaaacaaacaaacaaaaccccaaaaaaac8888888cc000cccecccccec
+-- 018:ccca00ccaaaa0ccecaaa0ceeaaaa0ceeaaaa0cee8888ccee000cceeecccceeee
+-- 019:cacccccccaaaaaaacaaacaaacaaaaccccaaaaaaac8888888cc000cccecccccec
+-- 020:ccca00ccaaaa0ccecaaa0ceeaaaa0ceeaaaa0cee8888ccee000cceeecccceeee
+-- 064:bbbbbbbbbdddddddbdbdddddbdddddddbdddddddbdddddddbdddddddbddddddd
+-- 065:bbbbbbbbdddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+-- 066:bbbbbbbbddddddd9ddddddd9ddddddd9ddddddd9ddddddd9ddddddd9ddddddd9
+-- 069:bdddddddbdddddddbdddddddbdddddddbdddddddbdddddddbdddddddbddddddd
+-- 070:bddddddd0bdddddd00bddddd000bdddd0000bddd00000bdd000000bd0000000b
+-- 080:bdddddddbdddddddbdddddddbdddddddbdddddddbdddddddbdddddddbddddddd
+-- 081:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+-- 082:ddddddd9ddddddd9ddddddd9ddddddd9ddddddd9ddddddd9ddddddd9ddddddd9
+-- 096:bdddddddbdddddddbdddddddbdddddddbdddddddbdddddddbdddddddb9999999
+-- 097:dddddddddddddddddddddddddddddddddddddddddddddddddddddddd99999999
+-- 098:ddddddd9ddddddd9ddddddd9ddddddd9ddddddd9ddddd9d9ddddddd999999999
+-- 101:0000000b000000bd00000bdd0000bddd000bdddd00bddddd0bddddddbddddddd
+-- 102:d0000000dd000000ddd00000dddd0000ddddd000dddddd00ddddddd0dddddddd
+-- 117:dddddddd0ddddddd00dddddd000ddddd0000dddd00000ddd000000dd0000000d
+-- 118:ddddddd9dddddd90ddddd900dddd9000ddd90000dd900000d900000090000000
+-- </TILES>
+
+-- <MAP>
+-- 000:041414240000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 001:061616260000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 002:041414240000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 003:051515250000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 004:051515250000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 005:051515250000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 006:051515250000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 007:051515250000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 008:051515250000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 009:051515250000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 010:051515250000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 011:061616260000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 012:041414240000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 013:051515250000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 014:051515250000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 015:051515250000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 016:061616260000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006
+-- 018:000000000000005614141466000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 019:000000000000000500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 020:000000000000000500000000000000000064660000000004000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 021:000000000000000500000000000000000000646600000005000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 022:000000000000000515675766000056670000566466000005000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 023:000000000000000500000057665667566600150064660005000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 024:000000000000000500000000576756675766150000646605000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 025:000000000000000500000000000057665667156700006415000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- 026:000000000000005715151567000000576700670000000064000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- </MAP>
+
+-- <WAVES>
+-- 000:00000000ffffffff00000000ffffffff
+-- 001:0123456789abcdeffedcba9876543210
+-- 002:0123456789abcdef0123456789abcdef
+-- </WAVES>
+
+-- <SFX>
+-- 000:000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000304000000000
+-- 001:000000000002000400070002000e000a000a000d00000003000600060004000e0009000d000f00000000000000000000000000000000000000000000c02000000000
+-- 002:030003000300030003000300030003000300030003000300030003000300030003000300030003000300030003000300030003000300030003000300000000000000
+-- 003:000200050006000200010000f000f000f000f000f000f000f000f000f000f000f000f000f000f000f000f000f000f000f000f000f000f000f000f000205000000000
+-- 004:0300030003000301030233037305930593025300230e030c030c030b030b030b430c730e9300a3029302930ef30cf30cf30cf300f300f300f300f300302000000000
+-- </SFX>
+
+-- <PATTERNS>
+-- 000:455116100010c00016d00016400016c00016800016100010400016100010100010000000400016a00016d00016900016400016100010000000000000400016100010000000000000400016100010000000000000400016000000000000000000400016000000000000000000400016100010000000000000400016100010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+-- </PATTERNS>
+
+-- <TRACKS>
+-- 000:100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004200
+-- </TRACKS>
+
+-- <PALETTE>
+-- 000:1a1c2c5d275db13e53ef7d57ffcd75a7f07038b76425717929366f3b5dc941a6f673eff7f4f4f494b0c2566c86333c57
+-- </PALETTE>
+
